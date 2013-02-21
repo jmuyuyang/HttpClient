@@ -5,7 +5,7 @@
 - libevent extension
 
 ###Documents
-`
+```
 include "HttpClient.php"  
 function callback($err,$req){  
 	if($err) return;  
@@ -15,4 +15,4 @@ HttpClient::call($url,$method,$data,"callback",$options);
 HttpClient::call($url,$method,$data,"callback",$options);  
 HttpClient::loop($loop_callback);
 /* the loop_callback will be called when all request has been dispatch */
-`
+```
