@@ -23,7 +23,7 @@ class HttpClient {
     private $_options = array(
         "accept_encoding" =>  "gzip",
         "accept_language" => "zh-CN,zh;q=0.8",
-        "user_agent" => "Incutio HttpClient v0.9",
+        "user_agent" => "HttpClient v1.0",
         "cookies" => array(),
         "referer" => null
     );
@@ -31,7 +31,7 @@ class HttpClient {
     /*init request config
     *@params: $event_base base event call from event_base_new
     */
-    function init($event_base){
+    public function init($event_base){
         $this->event_base = $event_base;
         $this->_callNum = count($this->urls);
     }
@@ -41,7 +41,7 @@ class HttpClient {
               $data request data
               $callback request callback,it will be called when request data return 
     */
-    function get($url,$data = false,$callback,$options = array()) {
+    public function get($url,$data = false,$callback,$options = array()) {
         $config = $this->_analysisUrl($url);
         if ($data) {
             $config['path'] .= '?'.http_build_query($data);
@@ -56,7 +56,7 @@ class HttpClient {
               $data request data
               $callback request callback,it will be called when request data return 
     */
-    function post($url,$data = false,$callback,$options = array()) {
+    public function post($url,$data = false,$callback,$options = array()) {
         $config = $this->_analysisUrl($url);
         $config['method'] = "POST";
         $config['data'] = http_build_query($data);
@@ -68,15 +68,15 @@ class HttpClient {
     /*do request base on Event-driven
     *@params: $idx index of url configs  
     */
-    function request($idx = 0) {
+    public function request($idx = 0) {
         $fp = stream_socket_client(
             $this->urls[$idx]['host'].":".$this->urls[$idx]['port'], 
             $errno, 
             $errstr, 
             (int) $this->timeout,
-            STREAM_CLIENT_CONNECT
+            STREAM_CLIENT_ASYNC_CONNECT | STREAM_CLIENT_CONNECT 
         );
-        //stream_set_blocking($fp, 0);
+        stream_set_blocking($fp, 0);
         stream_set_timeout($fp, $this->timeout);
 		if (!$fp) {
         	$errormsg = $this->setError($errno,$errstr);
@@ -110,6 +110,11 @@ class HttpClient {
         $content = "";
         $inHeaders = true;
         $atStart = true;
+		if(feof($fp)) {
+			$this->_callback($idx,"cannot fetch stream data",null);
+			event_del($args[0]);
+            return false;
+		}
         while (!feof($fp)) {
             $line = fgets($fp, 4096);
             if ($atStart) {
@@ -118,6 +123,7 @@ class HttpClient {
                 if (!preg_match('/HTTP\/(\\d\\.\\d)\\s*(\\d+)\\s*(.*)/', $line, $m)) {
                     $errormsg = "Status code line invalid: ".htmlentities($line);
                     $this->_callback($idx,$errormsg,null);
+                    event_del($args[0]);
                     return false;
                 }
                 continue;
@@ -159,7 +165,7 @@ class HttpClient {
         ));
     }
 
-    function setError($errno,$errstr){
+    public function setError($errno,$errstr){
         switch($errno) {
             case -3:
                 $errormsg = 'Socket creation failed (-3)';
@@ -178,7 +184,7 @@ class HttpClient {
         $urlConfig = parse_url($url);
         $config['host'] = $urlConfig['host'];
         $config['port'] = $urlConfig['port']?:80;
-        $config['path'] = $urlConfig['path'];
+        $config['path'] = $urlConfig['path']?:"/";
         return $config;
     }
 
@@ -213,9 +219,8 @@ class HttpClient {
     private function _callback($idx,$err,$req){
         $callback = $this->urls[$idx]['callback'];
         if($callback){
-            $callback($err,$req);
+			call_user_func($callback,$err,$req);
         }
-        echo $idx;
         $this->_loopExit();
     }
 
@@ -239,8 +244,10 @@ class HttpClient {
         $obj->{$method}($url,$data,$callback);
     }
 
-    /*begin request loop */
-    public static function loop($callback = null){
+    /*begin request loop 
+    *@params: $loop_callback this will be called while all request has been dispatched
+    */
+    public static function loop($loop_callback = null){
         $obj = self::_instance();
         $event_base = event_base_new();
         $obj->init($event_base);
@@ -249,7 +256,7 @@ class HttpClient {
             $obj->request(key($urls));
             next($urls);
         }
-        if($callback) $callback();
+        if($loop_callback) call_user_func($loop_callback);
         event_base_loop($event_base);
     }
 }
