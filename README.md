@@ -2,7 +2,8 @@
 ####Async HttpClient base on Event-driven written in php
 #Requirement：
 - PHP 5.3+
-- libevent extension
+- libevent extension (using HttpClient_Event.php)
+- libev extension (using HttpClient_Ev.php)
 
 ###Documents
 ```
