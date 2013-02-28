@@ -118,7 +118,6 @@ class HttpClient {
     }
 
     private function _write_cb($idx){
-        echo "sss";
         $options = (array)$this->urls[$idx]['options'];
         $options+=$this->_options;
         $request = $this->_buildRequest($idx,$options);
@@ -178,7 +177,6 @@ class HttpClient {
                 'headers' => $headers,
                 'content' => $content
             ));
-            //unset($headers);
             return true;
         }else{
             $error = $error?:"cannot fetch stream data";
