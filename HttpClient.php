@@ -10,7 +10,7 @@ class HttpClient {
     public $accept = 'text/xml,application/xml,application/xhtml+xml,text/html,text/plain,image/png,image/jpeg,image/gif,*/*';
     public $urls = array();
 
-    private $_callNum = 1;
+    private $_callNum = 0;
     private $_callConfig = array(
         "host" => null,
         "port" => 80,
@@ -28,12 +28,17 @@ class HttpClient {
         "referer" => null
     );
 
-    /*init request config
+    /*init request config and dispatch requests
     *@params: $event_base base event call from event_base_new
     */
     public function init($event_base){
         $this->event_base = $event_base;
-        $this->_callNum = count($this->urls);
+        $urls = $this->urls;
+        $this->_callNum = count($urls);
+        while(current($urls)){
+            $this->request(key($urls));
+            next($urls);
+        }
     }
 
     /*set request config base on get method 
@@ -99,7 +104,8 @@ class HttpClient {
 
     public function onAccept($fp, $event, $args){
         $idx = $args[2];
-        $options = $this->urls[$idx]['options']+$this->_options;
+        $options = (array)$this->urls[$idx]['options'];
+        $options+=$this->_options;
         $request = $this->_buildRequest($idx,$options);
         fwrite($fp, $request);
     }
@@ -108,23 +114,17 @@ class HttpClient {
         $idx = $args[2];
         $headers = array();
         $content = "";
+        $error = null;
         $inHeaders = true;
         $atStart = true;
-		if(feof($fp)) {
-			$this->_callback($idx,"cannot fetch stream data",null);
-			event_del($args[0]);
-            return false;
-		}
         while (!feof($fp)) {
             $line = fgets($fp, 4096);
             if ($atStart) {
                 // Deal with first line of returned data
                 $atStart = false;
                 if (!preg_match('/HTTP\/(\\d\\.\\d)\\s*(\\d+)\\s*(.*)/', $line, $m)) {
-                    $errormsg = "Status code line invalid: ".htmlentities($line);
-                    $this->_callback($idx,$errormsg,null);
-                    event_del($args[0]);
-                    return false;
+                    $error = "Status code line invalid: ".htmlentities($line);
+                    break;
                 }
                 continue;
             }
@@ -154,15 +154,22 @@ class HttpClient {
             $content .= $line;
         }
         fclose($fp);
-        if (isset($headers['content-encoding']) && $headers['content-encoding'] == 'gzip') {
-            $content = substr($content, 10); 
-            $content = gzinflate($content);
-        }
         event_del($args[0]);
-        $this->_callback($idx,null,array(
-            'headers' => $headers,
-            'content' => $content
-        ));
+        if($content && $headers){
+            if (isset($headers['content-encoding']) && $headers['content-encoding'] == 'gzip') {
+                $content = substr($content, 10); 
+                $content = gzinflate($content);
+            }
+            $this->_callback($idx,null,array(
+                'headers' => $headers,
+                'content' => $content
+            ));
+            return true;
+        }else{
+            $error = $error?:"cannot fetch stream data";
+            $this->_callback($idx,$error,null);
+            return false;
+        }
     }
 
     public function setError($errno,$errstr){
@@ -227,6 +234,7 @@ class HttpClient {
     private function _loopExit(){
         $this->_callNum--;
         if(!$this->_callNum){
+            $this->urls = array();
             event_base_loopexit($this->event_base);
         }
     }
@@ -251,11 +259,6 @@ class HttpClient {
         $obj = self::_instance();
         $event_base = event_base_new();
         $obj->init($event_base);
-        $urls = $obj->urls;
-        while(current($urls)){
-            $obj->request(key($urls));
-            next($urls);
-        }
         if($loop_callback) call_user_func($loop_callback);
         event_base_loop($event_base);
     }
