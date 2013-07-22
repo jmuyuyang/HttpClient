@@ -4,18 +4,19 @@
 * @version 1.0
 */
 
+define("SRC_ROOT",__DIR__);
+include SRC_ROOT."/EventLoop/Loop.php";
+
 class HttpClient {
-    public $event_base;
     public $timeout = 20;
     public $accept = 'text/xml,application/xml,application/xhtml+xml,text/html,text/plain,image/png,image/jpeg,image/gif,*/*';
     public $urls = array();
 
-    private $_callNum = 0;
     private $_callConfig = array(
         "host" => null,
         "port" => 80,
         "method" => "GET",
-        "callback" => null,
+        "pipe" => null,
         "data" => array(),
         "options" => array()
     );
@@ -23,59 +24,46 @@ class HttpClient {
     private $_options = array(
         "accept_encoding" =>  "gzip",
         "accept_language" => "zh-CN,zh;q=0.8",
-        "user_agent" => "HttpClient v1.0",
-        "cookies" => array(),
-        "referer" => null
+        "user_agent" => "HttpClient v1.0"
     );
-
-    /*init request config and dispatch requests
-    *@params: $event_base base event call from event_base_new
-    */
-    public function init($event_base){
-        $this->event_base = $event_base;
-        $urls = $this->urls;
-        $this->_callNum = count($urls);
-        while(current($urls)){
-            $this->request(key($urls));
-            next($urls);
-        }
-    }
 
     /*set request config base on get method 
     *@params: $url request url
               $data request data
-              $callback request callback,it will be called when request data return 
+              $pipe request to pipe,it will be called when request data return 
     */
-    public function get($url,$data = false,$callback,$options = array()) {
+    public function get($url,$data = false,$pipe,$options = array()) {
         $config = $this->_analysisUrl($url);
+        $id = (int)$this->request($config['host'],$config['port']);
         if ($data) {
             $config['path'] .= '?'.http_build_query($data);
         }
-        $config['callback'] = $callback;
+        $config['pipe'] = $pipe;
         $config['options'] = $options+$config['options'];
-        $this->urls[] = $config;
+        $this->urls[$id] = $config;
     }
 
     /*set request config base on post method 
     *@params: $url request url
               $data request data
-              $callback request callback,it will be called when request data return 
+              $stdout request to pipe,it will be called when request data return 
     */
-    public function post($url,$data = false,$callback,$options = array()) {
+    public function post($url,$data = false,$stdout,$options = array()) {
         $config = $this->_analysisUrl($url);
+        $id = (int)$this->request($config['host'],$config['port']);
         $config['method'] = "POST";
         $config['data'] = http_build_query($data);
-        $config['callback'] = $callback;
-        $config['options'] = $options+$config['options'];
-        $this->urls[] = $config;
+        $config['pipe'] = $stdout;
+        $config['options'] = $options + $this->_options;
+        $this->urls[$id] = $config;
     }
 
     /*do request base on Event-driven
     *@params: $idx index of url configs  
     */
-    public function request($idx = 0) {
+    public function request($host,$port) {
         $fp = stream_socket_client(
-            $this->urls[$idx]['host'].":".$this->urls[$idx]['port'], 
+            $host.":".$port, 
             $errno, 
             $errstr, 
             (int) $this->timeout,
@@ -85,40 +73,28 @@ class HttpClient {
         stream_set_timeout($fp, $this->timeout);
 		if (!$fp) {
         	$errormsg = $this->setError($errno,$errstr);
-            $this->_callback($idx,$errormsg,null);
+            $this->end($idx,$errormsg,null);
             return false;
         }
-        $base_fd = $this->event_base;
-        $writeEvent = event_new();
-        event_set($writeEvent, $fp, EV_WRITE | EV_PERSIST, 
-            array($this, 'onAccept'), array($writeEvent, $base_fd,$idx));
-        event_base_set($writeEvent, $base_fd);
-        event_add($writeEvent);
-
-        $readEvent = event_new();
-        event_set($readEvent, $fp, EV_READ | EV_PERSIST, 
-            array($this, 'onRead'), array($readEvent, $base_fd,$idx));
-        event_base_set($readEvent, $base_fd);
-        event_add($readEvent);
+        $this->loop->addWriteEvent($fp,array($this,"write"));
+        return $fp;
     }
 
-    public function onAccept($fp, $event, $args){
-        $idx = $args[2];
-        $options = (array)$this->urls[$idx]['options'];
-        $options+=$this->_options;
-        $request = $this->_buildRequest($idx,$options);
-        fwrite($fp, $request);
+    public function write($stream,$loop){
+        $idx = (int)$stream;
+        $request = $this->_buildRequest($this->urls[$idx]);
+        fwrite($stream, $request);
+        $loop->addReadEvent($stream,array($this,"read"));
     }
 
-    public function onRead($fp,$event,$args){
-        $idx = $args[2];
+    public function read($stream,$loop){
         $headers = array();
         $content = "";
         $error = null;
         $inHeaders = true;
         $atStart = true;
-        while (!feof($fp)) {
-            $line = fgets($fp, 4096);
+        while (!feof($stream)) {
+            $line = fgets($stream, 4096);
             if ($atStart) {
                 // Deal with first line of returned data
                 $atStart = false;
@@ -153,22 +129,45 @@ class HttpClient {
             // not in the headers, so append the line to the contents
             $content .= $line;
         }
-        fclose($fp);
-        event_del($args[0]);
+        $loop->removeEvent($stream);
         if($content && $headers){
             if (isset($headers['content-encoding']) && $headers['content-encoding'] == 'gzip') {
                 $content = substr($content, 10); 
                 $content = gzinflate($content);
             }
-            $this->_callback($idx,null,array(
+            $this->end($stream,null,array(
                 'headers' => $headers,
                 'content' => $content
             ));
             return true;
         }else{
             $error = $error?:"cannot fetch stream data";
-            $this->_callback($idx,$error,null);
+            $this->end($stream,$error,null);
             return false;
+        }
+    }
+
+    public function end($stream,$err,$req){
+        $idx = (int)$stream;
+        $this->pipe($stream,$err,$req);
+        unset($this->urls[$idx]);
+        fclose($stream);
+        if(!$this->urls) $this->loop->stop();
+    }
+
+    public function pipe($stream,$err,$req){
+        $idx = (int)$stream;
+        $stdout = $this->urls[$idx]['pipe'];
+        if($stdout){
+            if(is_resource($stdout)){
+                fwrite($stdout,$err?$err:$req);
+            }
+            if(is_callable($stdout)){
+                call_user_func($stdout,$err,$req);
+            }
+        }else{
+            $data = $err?$err:$req;
+            print($data);
         }
     }
 
@@ -195,48 +194,32 @@ class HttpClient {
         return $config;
     }
 
-    private function _buildRequest($idx,$options) {
+    private function _buildRequest($config) {
         $headers = array();
-        $headers[] = "{$this->urls[$idx]['method']} {$this->urls[$idx]['path']} HTTP/1.1"; // Using 1.1 leads to all manner of problems, such as "chunked" encoding
-        $headers[] = "Host: {$this->urls[$idx]['host']}";
-        $headers[] = "User-Agent: {$options['user_agent']}";
+        $headers[] = "{$config['method']} {$config['path']} HTTP/1.1"; // Using 1.1 leads to all manner of problems, such as "chunked" encoding
+        $headers[] = "Host: {$config['host']}";
+        $headers[] = "User-Agent: {$config['options']['user_agent']}";
         $headers[] = "Accept: {$this->accept}";
-        $headers[] = "Accept-language: {$options['accept_language']}";
-        if ($this->referer) {
-            $headers[] = "Referer: {$options['referer']}";
+        $headers[] = "Accept-language: {$config['options']['accept_language']}";
+        if (isset($config['options']['referer'])) {
+            $headers[] = "Referer: {$config['options']['referer']}";
         }
     	// Cookies
-    	if ($options['cookies']) {
+    	if (isset($config['options']['cookies'])) {
     	    $cookie = 'Cookie: ';
     	    foreach ($options['cookies'] as $key => $value) {
     	        $cookie .= "$key=$value; ";
     	    }
     	    $headers[] = $cookie;
     	}
-    	$postData = $this->urls[$idx]['data'];
-    	if ($this->urls[$idx]['method'] == "POST") {
+    	$postData = $config['data'];
+    	if ($config['method'] == "POST") {
     	    $headers[] = 'Content-Type: application/x-www-form-urlencoded';
     	    $headers[] = 'Content-Length: '.strlen($postData);
     	}
         $headers[] = "Connection: Close";
     	$request = implode("\r\n", $headers)."\r\n\r\n".$postData;
     	return $request;
-    }
-
-    private function _callback($idx,$err,$req){
-        $callback = $this->urls[$idx]['callback'];
-        if($callback){
-			call_user_func($callback,$err,$req);
-        }
-        $this->_loopExit();
-    }
-
-    private function _loopExit(){
-        $this->_callNum--;
-        if(!$this->_callNum){
-            $this->urls = array();
-            event_base_loopexit($this->event_base);
-        }
     }
 
     private static function _instance(){
@@ -247,20 +230,22 @@ class HttpClient {
         return $instance;
     }
 
-    public static function call($url,$method,$data,$callback){
+    /**
+    *init event loop
+    */
+    public static function init($loop){
         $obj = self::_instance();
-        $obj->{$method}($url,$data,$callback);
+        $obj->loop = $loop;
     }
 
-    /*begin request loop 
-    *@params: $loop_callback this will be called while all request has been dispatched
+    /**
+    *request $url base on event loop
     */
-    public static function loop($loop_callback = null){
+    public static function call($url,$method,$data,$pipe){
         $obj = self::_instance();
-        $event_base = event_base_new();
-        $obj->init($event_base);
-        if($loop_callback) call_user_func($loop_callback);
-        event_base_loop($event_base);
+        $obj->{$method}($url,$data,$pipe);
     }
 }
+
 ?>
+

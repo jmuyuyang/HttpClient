@@ -2,8 +2,7 @@
 ####Async HttpClient base on Event-driven written in php
 #Requirement：
 - PHP 5.3+
-- libevent extension (using HttpClient_Event.php)
-- libev extension (using HttpClient_Ev.php)
+- libevent extension or libev extension 
 
 ###Documents
 ```
@@ -12,8 +11,10 @@ function callback($err,$req){
 	if($err) return;  
 	var_dump($req);  
 }
-HttpClient::call($url,$method,$data,"callback",$options);  
-HttpClient::call($url,$method,$data,"callback",$options);  
-HttpClient::loop($loop_callback);
-/* the loop_callback will be called when all request has been dispatch */
+$loop = Loop::factory();
+//$loop = Loop::factory(Loop::LIBEV);
+HttpClient::init($loop);
+HttpClient::call("http://www.baidu.com","get",$data,"callback");
+HttpClient::call("http://www.baidu.com","get",$data,"callback");
+$loop->run();
 ```
