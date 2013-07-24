@@ -1,5 +1,5 @@
 <?php
-class LibEventLoop{
+class LibEventLoop implements LoopInterface{
 	public $base_loop;
 
 	public $events = array();
@@ -66,6 +66,10 @@ class LibEventLoop{
 			unset($this->events[$id]);
 			unset($this->readCallBacks[$id],$this->writeCallbacks[$id]);
 		}
+	}
+
+	function tick(){
+		event_base_loop($this->base_loop, EVLOOP_ONCE | EVLOOP_NONBLOCK);
 	}
 
 	function run(){

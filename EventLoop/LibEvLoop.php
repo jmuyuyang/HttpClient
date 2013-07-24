@@ -1,6 +1,5 @@
 <?php
-
-class LibEvLoop{
+class LibEvLoop implements LoopInterface{
 	public $loop;
 
 	public $readCallbacks = array();
@@ -49,6 +48,10 @@ class LibEvLoop{
 		$event = $this->events[$id];
 		$event->stop();
 		unset($this->events[$id],$this->readCallbacks[$id],$this->writeCallbacks[$id]);
+	}
+
+	function tick(){
+		$this->loop->run(Ev::RUN_ONCE);
 	}
 
 	function stop(){

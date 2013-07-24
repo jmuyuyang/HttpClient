@@ -14,7 +14,8 @@ function callback($err,$req){
 $loop = Loop::factory();
 //$loop = Loop::factory(Loop::LIBEV);
 HttpClient::init($loop);
-HttpClient::call("http://www.baidu.com","get",$data,"callback");
-HttpClient::call("http://www.baidu.com","get",$data,"callback");
+HttpClient::Get("http://www.baidu.com",$data,"callback");
+HttpClient::Get("http://www.baidu.com",$data,"callback");
 $loop->run();
 ```
+more example in examples directory

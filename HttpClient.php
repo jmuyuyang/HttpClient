@@ -5,6 +5,7 @@
 */
 
 define("SRC_ROOT",__DIR__);
+include SRC_ROOT."/EventLoop/LoopInterface.php";
 include SRC_ROOT."/EventLoop/Loop.php";
 
 class HttpClient {
@@ -32,7 +33,7 @@ class HttpClient {
               $data request data
               $pipe request to pipe,it will be called when request data return 
     */
-    public function get($url,$data = false,$pipe,$options = array()) {
+    public function http_get($url,$data = null,$pipe,$options = array()) {
         $config = $this->_analysisUrl($url);
         $id = (int)$this->request($config['host'],$config['port']);
         if ($data) {
@@ -48,7 +49,7 @@ class HttpClient {
               $data request data
               $stdout request to pipe,it will be called when request data return 
     */
-    public function post($url,$data = false,$stdout,$options = array()) {
+    public function http_post($url,$data = null,$stdout,$options = array()) {
         $config = $this->_analysisUrl($url);
         $id = (int)$this->request($config['host'],$config['port']);
         $config['method'] = "POST";
@@ -72,8 +73,7 @@ class HttpClient {
         stream_set_blocking($fp, 0);
         stream_set_timeout($fp, $this->timeout);
 		if (!$fp) {
-        	$errormsg = $this->setError($errno,$errstr);
-            $this->end($idx,$errormsg,null);
+            $this->callback($stream,$this->getError($errno,$errstr),null);
             return false;
         }
         $this->loop->addWriteEvent($fp,array($this,"write"));
@@ -88,90 +88,50 @@ class HttpClient {
     }
 
     public function read($stream,$loop){
-        $headers = array();
-        $content = "";
-        $error = null;
-        $inHeaders = true;
-        $atStart = true;
-        while (!feof($stream)) {
-            $line = fgets($stream, 4096);
-            if ($atStart) {
-                // Deal with first line of returned data
-                $atStart = false;
-                if (!preg_match('/HTTP\/(\\d\\.\\d)\\s*(\\d+)\\s*(.*)/', $line, $m)) {
-                    $error = "Status code line invalid: ".htmlentities($line);
-                    break;
-                }
-                continue;
+        $headers = $this->_parseHttpHeaders($stream);
+        if(!$this->pipe($stream)){
+            while(!feof($stream)){
+                $content .= fgets($stream,4096);
             }
-            if ($inHeaders) {
-                if (trim($line) == '') {
-                    $inHeaders = false;
-                    continue;
+            if($headers && $content){
+                if (isset($headers['content-encoding']) && $headers['content-encoding'] == 'gzip'){
+                    $this->httpUnGzip($content);
                 }
-                if (!preg_match('/([^:]+):\\s*(.*)/', $line, $m)) {
-                    // Skip to the next header
-                    continue;
-                }
-                $key = strtolower(trim($m[1]));
-                $val = trim($m[2]);
-                if (isset($headers[$key])) {
-                    if (is_array($headers[$key])) {
-                        $headers[$key][] = $val;
-                    } else {
-                        $headers[$key] = array($headers[$key], $val);
-                    }
-                } else {
-                    $headers[$key] = $val;
-                }
-                continue;
+                $this->callback($stream,null,array("headers" => $headers,"content" => $content));
+            }else{
+                $this->callback($stream,"cannot fetch stream data",null);
             }
-            // not in the headers, so append the line to the contents
-            $content .= $line;
         }
-        $loop->removeEvent($stream);
-        if($content && $headers){
-            if (isset($headers['content-encoding']) && $headers['content-encoding'] == 'gzip') {
-                $content = substr($content, 10); 
-                $content = gzinflate($content);
-            }
-            $this->end($stream,null,array(
-                'headers' => $headers,
-                'content' => $content
-            ));
-            return true;
-        }else{
-            $error = $error?:"cannot fetch stream data";
-            $this->end($stream,$error,null);
-            return false;
-        }
+        if(feof($stream)) $this->end($stream);
     }
 
-    public function end($stream,$err,$req){
+    public function pipe($stream){
         $idx = (int)$stream;
-        $this->pipe($stream,$err,$req);
+        $stdout = $this->urls[$idx]['pipe'];
+        if(is_resource($stdout)){
+            stream_copy_to_stream($stream, $stdout);
+            return true;
+        }
+        return false;
+    }
+
+    public function end($stream){
+        $idx = (int)$stream;
+        $this->loop->removeEvent($stream);
         unset($this->urls[$idx]);
         fclose($stream);
         if(!$this->urls) $this->loop->stop();
     }
 
-    public function pipe($stream,$err,$req){
+    public function callback($stream,$error,$req){
         $idx = (int)$stream;
         $stdout = $this->urls[$idx]['pipe'];
-        if($stdout){
-            if(is_resource($stdout)){
-                fwrite($stdout,$err?$err:$req);
-            }
-            if(is_callable($stdout)){
-                call_user_func($stdout,$err,$req);
-            }
-        }else{
-            $data = $err?$err:$req;
-            print($data);
+        if(is_callable($stdout)){
+            call_user_func($this->urls[$idx]['pipe'],$err,$req);
         }
     }
 
-    public function setError($errno,$errstr){
+    public function getError($errno,$errstr){
         switch($errno) {
             case -3:
                 $errormsg = 'Socket creation failed (-3)';
@@ -182,10 +142,10 @@ class HttpClient {
             default:
                 $errormsg = 'Connection failed ('.$errno.')';
         }
-        return $errormsg .= ' '.$errstr;
+        return $errormsg." ".$errstr;
     }
 
-    private function _analysisUrl($url){
+    protected function _analysisUrl($url){
         $config = $this->_callConfig;
         $urlConfig = parse_url($url);
         $config['host'] = $urlConfig['host'];
@@ -194,7 +154,46 @@ class HttpClient {
         return $config;
     }
 
-    private function _buildRequest($config) {
+    protected function _httpUnGzip($content){
+        $content = substr($content, 10); 
+        return gzinflate($content);
+    }
+
+    protected function _parseHttpHeaders($stream){
+        $startLine = true;
+        $headers = array();
+        while(!feof($stream)){
+            $line = fgets($stream,4096);
+            if($startLine){
+                if (!preg_match('/HTTP\/(\\d\\.\\d)\\s*(\\d+)\\s*(.*)/', $line, $m)){
+                    break;
+                }
+                $startLine = false;
+                continue;
+            }
+            if(trim($line) == ''){
+                break;
+            }
+            if (!preg_match('/([^:]+):\\s*(.*)/', $line, $m)) {
+                // Skip to the next header
+                continue;
+            }
+            $key = strtolower(trim($m[1]));
+            $val = trim($m[2]);
+            if (isset($headers[$key])) {
+                if (is_array($headers[$key])) {
+                    $headers[$key][] = $val;
+                } else {
+                    $headers[$key] = array($headers[$key], $val);
+                }
+            } else {
+                $headers[$key] = $val;
+            }
+        }
+        return $headers;
+    }
+
+    protected function _buildRequest($config) {
         $headers = array();
         $headers[] = "{$config['method']} {$config['path']} HTTP/1.1"; // Using 1.1 leads to all manner of problems, such as "chunked" encoding
         $headers[] = "Host: {$config['host']}";
@@ -212,6 +211,10 @@ class HttpClient {
     	    }
     	    $headers[] = $cookie;
     	}
+        //authorization
+        if(isset($config['options']['auth']) && ($auth = $config['options']['auth']))  
+            $headers[] = "Authorization: Basic ".base64_encode($auth[0].":".$auth[1]);
+
     	$postData = $config['data'];
     	if ($config['method'] == "POST") {
     	    $headers[] = 'Content-Type: application/x-www-form-urlencoded';
@@ -233,19 +236,26 @@ class HttpClient {
     /**
     *init event loop
     */
-    public static function init($loop){
+    public static function init(LoopInterface $loop){
         $obj = self::_instance();
         $obj->loop = $loop;
     }
 
     /**
-    *request $url base on event loop
+    *request $url across get method base on event loop
     */
-    public static function call($url,$method,$data,$pipe){
+    public static function Get($url,$data,$pipe = null,$options = array()){
         $obj = self::_instance();
-        $obj->{$method}($url,$data,$pipe);
+        $obj->http_get($url,$data,$pipe);
+    }
+
+    /**
+    *request $url across post method base on event loop
+    */
+    public static function Post($url,$data,$pipe = null,$options = array()){
+        $obj = self::_instance();
+        $obj->http_post($url,$data,$pipe);
     }
 }
-
 ?>
 
