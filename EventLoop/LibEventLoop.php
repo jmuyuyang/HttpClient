@@ -1,10 +1,14 @@
 <?php
+include HC_SRC_ROOT."/EventLoop/Timer/Timer.php";
+
 class LibEventLoop implements LoopInterface{
 	public $base_loop;
 
 	public $events = array();
 	public $readCallbacks = array();
 	public $writeCallbacks = array();
+	public $timers = array();
+	public $timer_counts = 0;
 
 	function __construct(){
 		$this->base_loop = event_base_new();
@@ -53,6 +57,45 @@ class LibEventLoop implements LoopInterface{
 
 		$this->events[$id] = $event;
 		$this->{$type."Callbacks"}[$id] = $handle;
+	}
+
+	function addTimer($interval,$callback,$periodic = false){
+		$timer = new Timer($this,$interval,$callback,$periodic);
+		$timer->setId($this->timer_counts);
+		$this->timer_counts++;
+		$timer->start();
+		return $timer;
+	}
+
+	function setupTimer($id,$timer){
+		$resource = event_new();
+		$timers = $this->timers;
+		$timers[$id] = $resource;
+		$callback = function ($stream,$flag,$timer) use (&$timers) {
+			$id = $timer->getId();
+        	if (isset($timers[$id])) {
+            	call_user_func($timer->getCallback(), $timer);
+ 
+                if ($timer->isPeriodic() && isset($timers[$timer])) {
+                    event_add($timers[$id], $timer->getInterval() * 1000000);
+                } else {
+                    $timer->cancel();
+	           	}
+            }
+        };
+	
+		event_timer_set($resource,$callback,$timer);
+        event_base_set($resource, $this->base_loop);
+        event_add($resource, $timer->getInterval() * 1000000);
+	}
+
+	function cancelTimer($timer_id){
+		if(isset($this->timers[$timer_id])){
+			$resource = $this->timers[$timer_id];
+			event_del($resource);
+			event_free($resource);
+			unset($this->timers[$timer_id]);
+		}
 	}
 
 	function removeEvent($stream){

@@ -3,10 +3,9 @@
 /*@author yuyang  20th february 2013 jmuljy@163.com 
 * @version 1.0
 */
-
-define("SRC_ROOT",__DIR__);
-include SRC_ROOT."/EventLoop/LoopInterface.php";
-include SRC_ROOT."/EventLoop/Loop.php";
+define("HC_SRC_ROOT",__DIR__);
+include HC_SRC_ROOT."/EventLoop/LoopInterface.php";
+include HC_SRC_ROOT."/EventLoop/Loop.php";
 
 class HttpClient {
     public $timeout = 20;
@@ -72,7 +71,7 @@ class HttpClient {
         );
         stream_set_blocking($fp, 0);
         stream_set_timeout($fp, $this->timeout);
-		if (!$fp) {
+        if (!$fp) {
             $this->callback($stream,$this->getError($errno,$errstr),null);
             return false;
         }
@@ -203,26 +202,26 @@ class HttpClient {
         if (isset($config['options']['referer'])) {
             $headers[] = "Referer: {$config['options']['referer']}";
         }
-    	// Cookies
-    	if (isset($config['options']['cookies'])) {
-    	    $cookie = 'Cookie: ';
-    	    foreach ($options['cookies'] as $key => $value) {
-    	        $cookie .= "$key=$value; ";
-    	    }
-    	    $headers[] = $cookie;
-    	}
+        // Cookies
+        if (isset($config['options']['cookies'])) {
+            $cookie = 'Cookie: ';
+            foreach ($options['cookies'] as $key => $value) {
+                $cookie .= "$key=$value; ";
+            }
+            $headers[] = $cookie;
+        }
         //authorization
         if(isset($config['options']['auth']) && ($auth = $config['options']['auth']))  
             $headers[] = "Authorization: Basic ".base64_encode($auth[0].":".$auth[1]);
 
-    	$postData = $config['data'];
-    	if ($config['method'] == "POST") {
-    	    $headers[] = 'Content-Type: application/x-www-form-urlencoded';
-    	    $headers[] = 'Content-Length: '.strlen($postData);
-    	}
+        $postData = $config['data'];
+        if ($config['method'] == "POST") {
+            $headers[] = 'Content-Type: application/x-www-form-urlencoded';
+            $headers[] = 'Content-Length: '.strlen($postData);
+        }
         $headers[] = "Connection: Close";
-    	$request = implode("\r\n", $headers)."\r\n\r\n".$postData;
-    	return $request;
+        $request = implode("\r\n", $headers)."\r\n\r\n".$postData;
+        return $request;
     }
 
     private static function _instance(){
@@ -258,4 +257,3 @@ class HttpClient {
     }
 }
 ?>
-
