@@ -8,6 +8,7 @@ class Timer{
 	function __construct($loop,$interval,$callback,$periodic){
 		$this->loop = $loop;
 		$this->interval = $interval;
+		$this->when_run = microtime(true) + $interval;
 		$this->callback = $callback;
 		$this->periodic = $periodic;
 	}

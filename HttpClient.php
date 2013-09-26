@@ -32,7 +32,7 @@ class HttpClient {
               $data request data
               $pipe request to pipe,it will be called when request data return 
     */
-    public function http_get($url,$data = null,$pipe,$options = array()) {
+    public function http_get($url,$data = null,$pipe,$options) {
         $config = $this->_analysisUrl($url);
         $id = (int)$this->request($config['host'],$config['port']);
         if ($data) {
@@ -48,7 +48,7 @@ class HttpClient {
               $data request data
               $stdout request to pipe,it will be called when request data return 
     */
-    public function http_post($url,$data = null,$stdout,$options = array()) {
+    public function http_post($url,$data = null,$stdout,$options) {
         $config = $this->_analysisUrl($url);
         $id = (int)$this->request($config['host'],$config['port']);
         $config['method'] = "POST";
@@ -213,14 +213,17 @@ class HttpClient {
         //authorization
         if(isset($config['options']['auth']) && ($auth = $config['options']['auth']))  
             $headers[] = "Authorization: Basic ".base64_encode($auth[0].":".$auth[1]);
-
-        $postData = $config['data'];
-        if ($config['method'] == "POST") {
+ 
+        if ($config['method'] == "POST" && isset($config['data'])) {
+            $postData = $config['data'];
             $headers[] = 'Content-Type: application/x-www-form-urlencoded';
             $headers[] = 'Content-Length: '.strlen($postData);
         }
         $headers[] = "Connection: Close";
-        $request = implode("\r\n", $headers)."\r\n\r\n".$postData;
+        $request = implode("\r\n", $headers)."\r\n\r\n";
+        if(isset($postData)){
+            $request .= $postData;
+        }
         return $request;
     }
 
@@ -245,7 +248,7 @@ class HttpClient {
     */
     public static function Get($url,$data,$pipe = null,$options = array()){
         $obj = self::_instance();
-        $obj->http_get($url,$data,$pipe);
+        $obj->http_get($url,$data,$pipe,$options);
     }
 
     /**
@@ -253,7 +256,7 @@ class HttpClient {
     */
     public static function Post($url,$data,$pipe = null,$options = array()){
         $obj = self::_instance();
-        $obj->http_post($url,$data,$pipe);
+        $obj->http_post($url,$data,$pipe,$options);
     }
 }
 ?>
